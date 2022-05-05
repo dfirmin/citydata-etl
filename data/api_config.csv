@@ -1,0 +1,2 @@
+﻿api,endpoint,parameters,s3_directory
+greatschools,https://gs-api.greatschools.org/schools,"state,zip","state_id,city"

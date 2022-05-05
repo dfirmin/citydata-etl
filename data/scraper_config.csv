@@ -1,0 +1,3 @@
+﻿site,url,element_id,s3_directory
+city-data,https://www.city-data.com/city/{}.html,content,"state, city"
+usa,http://www.usa.com/{}.htm,content,"state, city"
