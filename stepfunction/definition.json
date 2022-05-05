@@ -1,0 +1,27 @@
+{
+  "StartAt": "Invoke Lambda",
+  "States": {
+    "Invoke Lambda": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::lambda:invoke",
+      "Parameters": {
+        "FunctionName": "arn:aws:lambda:us-east-2:581630188109:function:collect-html:$LATEST",
+        "Payload": {
+          "site": "usa"
+        }
+      },
+      "Retry": [
+        {
+          "ErrorEquals": [
+            "States.Timeout",
+            "Lambda.Unknown"
+          ],
+          "IntervalSeconds": 30,
+          "BackoffRate": 1,
+          "MaxAttempts": 10
+        }
+      ],
+      "End": true
+    }
+  }
+}
