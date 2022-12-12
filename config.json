@@ -1,0 +1,28 @@
+{
+    "website": {
+      "city-data": {
+        "url": "https://www.city-data.com/",
+        "element_id": "content",
+        "parameters": "state,city",
+        "scrape_interval": 3600
+      },
+      "usa": {
+        "url": "http://www.usa.com/",
+        "element_id": "content",
+        "parameters": "state,city",
+        "scrape_interval": 7200
+      }
+    },
+    "api": {
+      "greatschools": {
+        "endpoint": "https://gs-api.greatschools.org/schools",
+        "parameters": "state,zip",
+        "api_key": "abc123"
+      },
+      "anotherapi.com": {
+        "endpoint": "https://api.anotherapi.com",
+        "parameters": "sort_by,filter",
+        "api_key": "xyz456"
+      }
+    }
+  }

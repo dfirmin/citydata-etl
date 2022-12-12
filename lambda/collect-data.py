@@ -20,7 +20,7 @@ except Exception as e:
     print("Error in Imports. {}".format(e))
 
 # Amazon S3 client
-s3 = boto3.client("s3")
+s3_client = boto3.client("s3")
 
 class WebDriver(object):
 
@@ -49,16 +49,17 @@ def get_options(data_source, source_name):
     Returns: The details of the specified data source and source name as a dictionary
     """
     # Name of the S3 bucket
-    CONFIG_BUCKET_NAME = "my-bucket"
+    CONFIG_BUCKET_NAME = "city-dataanalytics-raw"
 
     # Key of the S3 object (i.e., the file name)
     CONFIG_OBJECT_KEY = "config.json"
     # Download the S3 object (i.e., the JSON config file)
-    response = s3.get_object(Bucket=CONFIG_BUCKET_NAME, Key=CONFIG_OBJECT_KEY)
+    response = s3_client.get_object(Bucket=CONFIG_BUCKET_NAME, Key=CONFIG_OBJECT_KEY)
     
     # Convert the JSON config file to a dictionary
-    config = response["Body"].read().decode("utf-8")
-    
+    config_str = response["Body"].read().decode("utf-8")
+    config = json.loads(config_str)
+
     # Return the details of the specified data source and source name
     return config[data_source][source_name]
 
@@ -85,7 +86,7 @@ def collect_from_site(site_url, element_id):
     element = soup.find(id=element_id)
     
     # Extract the text from the HTML element
-    data = element.get_text()
+    data = element
     
     return data
 
@@ -107,98 +108,103 @@ def collect_from_api(endpoint_url, endpoint_params):
     
     return data
 
-def update_csv_file(BUCKET_NAME, OBJECT_KEY, row):
-    # Get the S3 object (i.e., the CSV file)
-    response = s3.get_object(Bucket=BUCKET_NAME, Key=OBJECT_KEY)
+def update_csv_file(bucket_name, object_key, updated_row, csv_file):
+    s3_client.download_file(bucket_name, object_key, '/tmp/original_file.csv')
+    # Set the date_completed of the row to the current date and time
+    updated_row['date_completed'] = datetime.datetime.now(timezone.utc).strftime("%Y-%m-%dT%H-%M-%S")
     
-    # Convert the CSV file to a list of lists
-    csv_file = list(csv.reader(response["Body"].read().decode("utf-8").splitlines()))
+    # Open the original file in read mode
+    with open('/tmp/original_file.csv', 'r') as original_file:
+        # Open a new file in write mode
+        with open('/tmp/new_file.csv', 'w') as new_file:
+            # Create a new CSV writer
+            writer = csv.DictWriter(new_file, fieldnames=csv_file.fieldnames)
+            # Write the header row
+            writer.writeheader()
     
-    # If the row is not None, update its status
-    if row is not None:
-        # Set the status of the row to "collected"
-        row[1] = "collected"
-        
-        # Set the date_completed of the row to the current date and time
-        row[2] = datetime.datetime.now(timezone.utc).strftime("%Y-%m-%dT%H-%M-%S")
-        
-        # Find the index of the row in the CSV file
-        index = csv_file.index(row)
-        
-        # Update the row in the CSV file
-        csv_file[index] = row
-    else:
-        # Set the status of the row to "error"
-        csv_file[1] = "error"
-        
-    # Convert the CSV file back to a string
-    csv_file_string = "\n".join([",".join(row) for row in csv_file])
+            # Iterate over the rows in the original CSV file
+            for row in csv.DictReader(original_file):
+                # If the current row is the updated row, write the updated row to the new file
+                if row['id'] == updated_row['id']:
+                    writer.writerow(updated_row)
+                else:
+                    # Otherwise, write the original row to the new file
+                    writer.writerow(row)
     
-    # Upload the updated CSV file to the S3 bucket
-    s3.put_object(Bucket=BUCKET_NAME, Key=OBJECT_KEY, Body=csv_file_string)
+    # Upload the new file to S3
+    s3_client.upload_file('/tmp/new_file.csv', bucket_name, object_key)
+
+
+
 
 def lambda_handler(event, context):
     # Get the data_source and data_name from the event object
     data_source = event["data_source"]
-    data_name = event["data_name"]
+    source_name = event["source_name"]
     
     # Use the get_options function to get the details of the specified data source and data name
-    options = get_options(data_source, data_name)
+    options = get_options(data_source, source_name)
 
     # Name of the S3 bucket
-    BUCKET_NAME = "my-bucket"
+    CONTROL_BUCKET_NAME = "city-dataanalytics-raw"
+    TARGET_BUCKET_NAME = "city-dataanalytics-staging"
     
     # Key of the S3 object (i.e., the file name)
-    OBJECT_KEY = f"{event['data_name']}.csv"
+    OBJECT_KEY = f"{event['source_name']}_control.csv"
     
-    # Download the S3 object (i.e., the CSV file)
-    response = s3.get_object(Bucket=BUCKET_NAME, Key=OBJECT_KEY)
+    # Download the S3 object (i.e., the CSV control file)
+    response = s3_client.get_object(Bucket=CONTROL_BUCKET_NAME, Key=OBJECT_KEY)
     
     # Open the CSV file
-    csv_file = csv.reader(response["Body"].read().decode("utf-8").splitlines())
-
+    csv_file = csv.DictReader(response["Body"].read().decode("utf-8").splitlines())
+    
     # Check if the data source is a website or API
     if data_source == "website":
         # Iterate over the rows in the CSV file
         for row in csv_file:
             # Check if the second column in the row is empty
-            if not row[1]:
-                # Get the state and city values from the row
-                page = row[0]
-                state = row[2]
-                city = row[3]
+            if not row['status'] and row['id']:
+                # Get the site, state and city values from the row
+                page = row['url']
+                state = row['state']
+                city = row['city']
 
                 # Get the current timestamp
                 timestamp = datetime.datetime.now().strftime("%Y-%m-%dT%H-%M-%S")
 
                 # Collect the data from the page
                 page_data = collect_from_site(page, options["element_id"])
+                if page_data is None:
+                    row['status'] = 'error'
+                    update_csv_file(CONTROL_BUCKET_NAME, OBJECT_KEY, row, csv_file)
+                else:
+                    row['status'] = 'completed'
+                    # Generate the S3 object key (i.e., the file name) using the state, city, and timestamp
+                    object_key = f"{data_source}/{source_name}/{state}/{city}/{timestamp}.txt"
+                    
+                    # Write the collected data to the S3 bucket using the generated object key
+                    s3_client.put_object(Bucket=TARGET_BUCKET_NAME, Key=object_key, Body=str(page_data))
+                    update_csv_file(CONTROL_BUCKET_NAME, OBJECT_KEY, row, csv_file)
 
-                # Generate the S3 object key (i.e., the file name) using the state, city, and timestamp
-                object_key = f"{data_source}_{data_name}_{state}_{city}_{timestamp}.txt"
-                
-                # Write the collected data to the S3 bucket using the generated object key
-                s3.put_object(Bucket=BUCKET_NAME, Key=object_key, Body=page_data)
 
     elif data_source == "api":
-        api_key = ''
         # Iterate over the rows in the CSV file
         for row in csv_file:
             # Check if the second column in the row is empty
-            if not row[1]:
+            if not row[3]:
                 # Get the state and city values from the row
-                endpoint = row[0]
-                state = row[2]
-                city = row[3]
+                endpoint = row['endpoint']
+                state = row['state']
+                city = row['city']
 
                 # Get the current timestamp
                 timestamp = datetime.datetime.now().strftime("%Y-%m-%dT%H-%M-%S")
 
                 # Collect the data from the API using the collect_from_api function
-                api_data = collect_from_api(endpoint, api_key)
+                api_data = collect_from_api(endpoint, options["api_key"])
 
                 # Generate the S3 object key (i.e., the file name) using the state, city, and timestamp
                 object_key = f"{data_source}_{data_name}_{state}_{city}_{timestamp}.txt"
                 
                 # Write the collected data to the S3 bucket using the generated object key
-                s3.put_object(Bucket=BUCKET_NAME, Key=object_key, Body=api_data)
+                s3_client.put_object(Bucket=TARGET_BUCKET_NAME, Key=object_key, Body=api_data)
